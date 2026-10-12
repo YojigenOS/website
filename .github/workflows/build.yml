@@ -66,6 +66,14 @@ jobs:
       - name: 装依赖
         run: bun install --frozen-lockfile
 
+      # 检查排在构建【之前】——构建不做类型检查也不做 lint，让它在最后跑
+      # 等于把这些门都放在产物已经生成之后。
+      - name: 查 lint
+        run: bun run lint
+
+      - name: 查格式
+        run: bun run fmt:check
+
       - name: 建站
         run: bun run build
 
