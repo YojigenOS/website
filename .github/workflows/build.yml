@@ -1,0 +1,81 @@
+# 建网站
+#
+# 一个 workflow，一件事：把 src/ 建成 dist/。
+#
+# ── 为什么优先跑 arm ──────────────────────────────────────────────────────
+#
+# 公开仓库上 arm64 的标准 runner 免费且无限，但这不是主要理由——x64 的
+# 标准 runner 同样免费。真正的理由是【vCPU 怎么折算成物理核】：
+#
+#     ubuntu-26.04-arm   Azure Dpsv6  4 个完整物理核（Cobalt 100 / Neoverse N2）
+#     ubuntu-26.04       Azure Dadsv5 2 个物理核 + SMT（EPYC 7763v 或 9004）
+#
+# 两个标签都写着「4 vCPU」，但物理核数差一倍。Azure 文档在 Dpsv6 那一页特意
+# 写了 "provides an entire physical core for each virtual machine vCPU"——
+# 那句话是差异化声明，它之所以要写，正是因为别的不这么给。
+#
+# 建站是并行吞吐型的活（一堆小文件、少量编译），物理核数比单核频率更相关。
+# 单核那侧是 x64 更强：Zen 3/4 比 Neoverse N2 新，N2 大致在 Skylake~Ice Lake
+# 那一档。所以这个选择是拿单核换核数换来的，不是「arm 全面更快」。
+#
+# ★ 有一条要记着：Dpsv6 没有本地临时盘（Dadsv5 有 75~3600 GiB），GitHub 标的
+#   14 GB 全部来自系统盘。现在产物只有几百 KB，不构成问题；哪天要在这个
+#   workflow 里做重的构建，先回来看这一条。
+#
+# ── 为什么钉 bun 的版本 ───────────────────────────────────────────────────
+#
+# 和钉 runner 标签是同一个理由：构建环境不该静默变化。`latest` 是个移动
+# 别名，今天能过不代表明天能过。
+#
+# ── 为什么是 --frozen-lockfile ────────────────────────────────────────────
+#
+# bun.lock 在版本控制里，它就是依赖的那个固定点。CI 上不做依赖解析——
+# 否则同一个 commit 在不同时间会装出不同的树，而这件事没有任何报错。
+
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+
+    steps:
+      - name: 取网站
+        uses: actions/checkout@v7
+
+      - name: 报告这台机器是什么
+        run: |
+          # 上面那段「4 vCPU 是 4 个物理核」的说法，在这里当场验一次。
+          # 关键是 Thread(s) per core——arm 那台应该是 1。
+          lscpu | grep -E "Architecture|^CPU\(s\)|Model name|Thread\(s\) per core|Core\(s\) per socket|MHz" \
+            | sed 's/^/  /'
+
+      - name: 装 bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: 装依赖
+        run: bun install --frozen-lockfile
+
+      - name: 建站
+        run: bun run build
+
+      - name: 报告产物
+        run: |
+          echo "=== dist/ ==="
+          find dist -type f | sort | sed 's/^/  /'
+
+      - name: 存产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
